@@ -33,6 +33,12 @@ namespace AlexDunnVoice.Controllers
             _responseHandler = new AlexaHandler();
             return await Route(GetAlexaIntentName(input));
         }
+        [HttpPost("Alexa/Unsigned")]
+        public async Task<JsonResult> AlexaUnsigned([FromBody]SkillRequest input)
+        {
+            _responseHandler = new AlexaHandler();
+            return await Route(GetAlexaIntentName(input));
+        }
 
         private async Task<JsonResult> Route(string intentName)
         {

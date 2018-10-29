@@ -38,21 +38,27 @@ namespace AlexDunnVoice.Controllers.Filters
 
         public async void OnActionExecuting(ActionExecutingContext context)
         {
-#if DEBUG
-            return;
-#endif
-            var body = context.ActionArguments.Values.FirstOrDefault() as SkillRequest;
-
-            // validate app
-            if(body?.Session?.Application?.ApplicationId != _settings.Value.AlexaSkillId)
+            try
             {
-                context.Result = new BadRequestResult();
-                return;
+                var body = context.ActionArguments.Values.FirstOrDefault() as SkillRequest;
+
+                // validate app
+                if (body?.Session?.Application?.ApplicationId != _settings.Value.AlexaSkillId)
+                {
+                    context.Result = new BadRequestResult();
+                    return;
+                }
+
+                var isValid = await IsValidAlexaRequestAsync(context.HttpContext.Request, JsonConvert.SerializeObject(body));
+
+                if (!isValid)
+                {
+                    context.Result = new BadRequestResult();
+                    return;
+                }
+
             }
-
-            var isValid = await IsValidAlexaRequestAsync(context.HttpContext.Request, JsonConvert.SerializeObject(body));
-
-            if (!isValid)
+            catch
             {
                 context.Result = new BadRequestResult();
                 return;
@@ -65,49 +71,64 @@ namespace AlexDunnVoice.Controllers.Filters
         /// <returns></returns>
         private async Task<bool> IsValidAlexaRequestAsync(HttpRequest request, string body)
         {
-            
-            request.Body.Position = 0;
-
-            // Verify SignatureCertChainUrl is present
-            request.Headers.TryGetValue("SignatureCertChainUrl", out var signatureChainUrl);
-            if (string.IsNullOrWhiteSpace(signatureChainUrl))
-            {
-                Trace.TraceError(@"Alexa - empty Signature Cert Chain Url header");
-                return false;
-            }
-
-            Uri certUrl;
             try
             {
-                certUrl = new Uri(signatureChainUrl);
+                // Verify SignatureCertChainUrl is present
+                var hasHeader = request.Headers.TryGetValue("SignatureCertChainUrl", out var signatureChainUrl);
+                if (!hasHeader)
+                    return false;
+
+                if (string.IsNullOrWhiteSpace(signatureChainUrl))
+                {
+                    Trace.TraceError(@"Alexa - empty Signature Cert Chain Url header");
+                    return false;
+                }
+
+                Uri certUrl;
+                try
+                {
+                    certUrl = new Uri(signatureChainUrl);
+                    var validUrl = RequestVerifier.VerifyCertificateUrl(certUrl);
+                    if (!validUrl)
+                        return false;
+                }
+                catch
+                {
+                    Trace.TraceError($@"Alexa - Unable to put sig chain url in to Uri: {signatureChainUrl}");
+                    return false;
+                }
+
+                // Verify SignatureCertChainUrl is Signature
+                var hasSignature = request.Headers.TryGetValue("Signature", out var signature);
+                if (!hasSignature)
+                    return false;
+
+                if (string.IsNullOrWhiteSpace(signature))
+                {
+                    Trace.TraceError(@"Alexa - empty Signature header");
+                    return false;
+                }
+
+                if (string.IsNullOrWhiteSpace(body))
+                {
+                    Trace.TraceError(@"Alexa - empty body");
+                    return false;
+                }
+                var valid = await RequestVerifier.Verify(signature, certUrl, body);
+
+                if (!valid)
+                {
+                    Trace.TraceError(@"Alexa - RequestVerification.Verify failed");
+                    return false;
+                }
+
+                return valid;
+
             }
             catch
             {
-                Trace.TraceError($@"Alexa - Unable to put sig chain url in to Uri: {signatureChainUrl}");
                 return false;
             }
-
-            // Verify SignatureCertChainUrl is Signature
-            request.Headers.TryGetValue("Signature", out var signature);
-            if (string.IsNullOrWhiteSpace(signature))
-            {
-                Trace.TraceError(@"Alexa - empty Signature header");
-                return false;
-            }
-            
-            if (string.IsNullOrWhiteSpace(body))
-            {
-                Trace.TraceError(@"Alexa - empty body");
-                return false;
-            }
-            var valid = await RequestVerifier.Verify(signature, certUrl, body);
-
-            if (!valid)
-            {
-                Trace.TraceError(@"Alexa - RequestVerification.Verify failed");
-            }
-            return valid;
-
         }
 
         /// <summary>
@@ -115,15 +136,23 @@ namespace AlexDunnVoice.Controllers.Filters
         /// </summary>
         public static class RequestVerifier
         {
-            /// <summary>
-            /// Verfiy runs through all verification steps
-            /// </summary>
-            /// <param name="encodedSignature"></param>
-            /// <param name="certificatePath"></param>
-            /// <param name="body"></param>
-            /// <returns></returns>
+            private const int AllowedTimestampToleranceInSeconds = 150;
+
+            public static bool RequestTimestampWithinTolerance(SkillRequest request)
+            {
+                return RequestTimestampWithinTolerance(request.Request.Timestamp);
+            }
+
+            public static bool RequestTimestampWithinTolerance(DateTime timestamp)
+            {
+                return Math.Abs(DateTime.Now.Subtract(timestamp).TotalSeconds) <= AllowedTimestampToleranceInSeconds;
+            }
+
             public static async Task<bool> Verify(string encodedSignature, Uri certificatePath, string body)
             {
+                if (!RequestTimestampWithinTolerance(JsonConvert.DeserializeObject<SkillRequest>(body)))
+                    return false;
+
                 if (!VerifyCertificateUrl(certificatePath))
                 {
                     return false;
@@ -143,34 +172,14 @@ namespace AlexDunnVoice.Controllers.Filters
                 return true;
             }
 
-            /// <summary>
-            /// Checks if the body has been modified making the signature invalid
-            /// </summary>
-            /// <param name="certificate"></param>
-            /// <param name="encodedSignature"></param>
-            /// <param name="body"></param>
-            /// <returns></returns>
             public static bool AssertHashMatch(X509Certificate2 certificate, string encodedSignature, string body)
             {
-                byte[] signature;
-                try
-                {
-                    signature = Convert.FromBase64String(encodedSignature);
-                }
-                catch
-                {
-                    return false;
-                }
+                var signature = Convert.FromBase64String(encodedSignature);
                 var rsa = certificate.GetRSAPublicKey();
 
                 return rsa.VerifyData(Encoding.UTF8.GetBytes(body), signature, HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1);
             }
 
-            /// <summary>
-            /// Download the certificate from the server
-            /// </summary>
-            /// <param name="certificatePath"></param>
-            /// <returns></returns>
             public static async Task<X509Certificate2> GetCertificate(Uri certificatePath)
             {
                 var response = await new HttpClient().GetAsync(certificatePath);
@@ -178,34 +187,22 @@ namespace AlexDunnVoice.Controllers.Filters
                 return new X509Certificate2(bytes);
             }
 
-            /// <summary>
-            /// Verify the certificate chain
-            /// </summary>
-            /// <param name="certificate"></param>
-            /// <returns></returns>
             public static bool VerifyChain(X509Certificate2 certificate)
             {
+                //https://stackoverflow.com/questions/24618798/automated-downloading-of-x509-certificatePath-chain-from-remote-host
+
                 X509Chain certificateChain = new X509Chain();
+                //If you do not provide revokation information, use the following line.
                 certificateChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
                 return certificateChain.Build(certificate);
             }
 
-            /// <summary>
-            /// Check if certificate is valid for this point in time
-            /// </summary>
-            /// <param name="certificate"></param>
-            /// <returns></returns>
             private static bool ValidSigningCertificate(X509Certificate2 certificate)
             {
                 return DateTime.Now < certificate.NotAfter && DateTime.Now > certificate.NotBefore &&
                        certificate.GetNameInfo(X509NameType.SimpleName, false) == "echo-api.amazon.com";
             }
 
-            /// <summary>
-            /// Verify that the certificate is stored in the right place
-            /// </summary>
-            /// <param name="certificate"></param>
-            /// <returns></returns>
             public static bool VerifyCertificateUrl(Uri certificate)
             {
                 return certificate.Scheme == "https" &&
