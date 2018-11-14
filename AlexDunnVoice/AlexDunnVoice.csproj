@@ -11,7 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Alexa.NET" Version="1.5.4" />
+    <PackageReference Include="Alexa.NET" Version="1.5.5" />
     <PackageReference Include="Google.Apis.Dialogflow.v2" Version="1.36.1.1390" />
     <PackageReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.AspNetCore.Razor.Design" Version="2.1.2" PrivateAssets="All" />

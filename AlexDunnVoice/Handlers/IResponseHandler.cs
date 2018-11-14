@@ -10,6 +10,7 @@ namespace AlexDunnVoice.Handlers
     public interface IResponseHandler
     {
         JsonResult Welcome();
+        JsonResult Exit();
         JsonResult Help();
         JsonResult BlogPosts(List<BlogPost> posts);
     }

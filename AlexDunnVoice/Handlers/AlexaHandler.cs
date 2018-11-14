@@ -23,6 +23,10 @@ namespace AlexDunnVoice.Handlers
             return new JsonResult(ResponseBuilder.Ask(Messages.Help, null));
         }
 
+        public JsonResult Exit()
+        {
+            return new JsonResult(ResponseBuilder.Tell("Be sure to come back for updates from Suave Pirate!", null));
+        }
         public JsonResult Welcome()
         {
             return new JsonResult(ResponseBuilder.Ask(Messages.Welcome, null));
